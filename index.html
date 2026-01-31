@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Visual RAG Playground</title>
+<style>
+body {
+font-family: Inter, system-ui, sans-serif;
+background: #0f172a;
+color: #e5e7eb;
+margin: 0;
+padding: 20px;
+}
+
+h1 {
+text-align: center;
+margin-bottom: 8px;
+}
+
+.subtitle {
+text-align: center;
+color: #94a3b8;
+margin-bottom: 30px;
+}
+
+.step {
+background: #020617;
+border: 1px solid #1e293b;
+border-radius: 10px;
+padding: 16px;
+margin-bottom: 16px;
+}
+
+.step.active {
+border-color: #38bdf8;
+box-shadow: 0 0 0 1px #38bdf8;
+}
+
+.step h2 {
+margin: 0 0 10px;
+font-size: 16px;
+color: #7dd3fc;
+}
+
+textarea, input, select, button {
+width: 100%;
+margin-top: 8px;
+padding: 8px;
+border-radius: 6px;
+border: 1px solid #334155;
+background: #020617;
+color: #e5e7eb;
+}
+
+button {
+background: #0284c7;
+border: none;
+cursor: pointer;
+margin-top: 10px;
+}
+
+button:hover {
+background: #0369a1;
+}
+
+.output {
+background: #020617;
+border: 1px dashed #334155;
+padding: 10px;
+border-radius: 6px;
+margin-top: 10px;
+white-space: pre-wrap;
+font-size: 13px;
+}
+
+.chunk {
+padding: 6px;
+border-bottom: 1px solid #1e293b;
+}
+
+.highlight {
+background: #082f49;
+}
+</style>
+</head>
+
+<body>
+
+<h1>🔍 Visual RAG Playground</h1>
+<div class="subtitle">Learn Retrieval-Augmented Generation step by step</div>
+
+<!-- STEP 1 -->
+<div class="step active" id="step1">
+<h2>1. Enter text & chunk settings</h2>
+<textarea id="sourceText" rows="4" placeholder="Paste your source text here..."></textarea>
+<input id="chunkSize" type="number" placeholder="Chunk size (characters)" value="120">
+<input id="overlap" type="number" placeholder="Sliding window overlap" value="30">
+<button onclick="chunkText()">Chunk Text</button>
+</div>
+
+<!-- STEP 2 -->
+<div class="step" id="step2">
+<h2>2. Generated chunks</h2>
+<div id="chunksOutput" class="output"></div>
+<button onclick="createEmbeddings()">Create Vector Embeddings</button>
+</div>
+
+<!-- STEP 3 -->
+<div class="step" id="step3">
+<h2>3. Vector embeddings</h2>
+<div id="vectorsOutput" class="output"></div>
+<button onclick="saveVectors()">Save Vectors</button>
+</div>
+
+<!-- STEP 4 -->
+<div class="step" id="step4">
+<h2>4. Ask a user query</h2>
+<input id="userQuery" placeholder="Ask something..." />
+<input id="topN" type="number" value="3" placeholder="Top N chunks">
+<button onclick="search()">Ask</button>
+</div>
+
+<!-- STEP 5 -->
+<div class="step" id="step5">
+<h2>5. Top matching chunks (Vector Similarity)</h2>
+<div id="resultsOutput" class="output"></div>
+</div>
+
+<!-- STEP 6 -->
+<div class="step" id="step6">
+<h2>6. Final prompt sent to LLM</h2>
+<div id="promptOutput" class="output"></div>
+</div>
+
+<!-- STEP 7 -->
+<div class="step" id="step7">
+<h2>7. LLM response</h2>
+<div id="answerOutput" class="output"></div>
+</div>
+
+<script>
+let chunks = [];
+let vectors = [];
+
+/* STEP 1 – Chunking */
+function chunkText() {
+const text = sourceText.value;
+const size = Number(chunkSize.value);
+const overlap = Number(overlap.value);
+
+chunks = [];
+for (let i = 0; i < text.length; i += size - overlap) {
+chunks.push(text.slice(i, i + size));
+}
+
+chunksOutput.innerHTML = chunks.map((c, i) =>
+`<div class="chunk"><b>Chunk ${i+1}:</b> ${c}</div>`
+).join("");
+
+activateStep(2);
+}
+
+/* Fake embedding (deterministic) */
+function embed(text) {
+const vec = Array(8).fill(0);
+for (let i = 0; i < text.length; i++) {
+vec[i % 8] += text.charCodeAt(i);
+}
+return vec;
+}
+
+/* STEP 2 – Create embeddings */
+function createEmbeddings() {
+vectors = chunks.map(c => embed(c));
+vectorsOutput.textContent = JSON.stringify(vectors, null, 2);
+activateStep(3);
+}
+
+/* STEP 3 – Save */
+function saveVectors() {
+localStorage.setItem("rag_chunks", JSON.stringify(chunks));
+localStorage.setItem("rag_vectors", JSON.stringify(vectors));
+activateStep(4);
+}
+
+/* Cosine similarity */
+function cosine(a, b) {
+let dot = 0, na = 0, nb = 0;
+for (let i = 0; i < a.length; i++) {
+dot += a[i] * b[i];
+na += a[i] ** 2;
+nb += b[i] ** 2;
+}
+return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
+/* STEP 4–7 */
+function search() {
+const query = userQuery.value;
+const top = Number(topN.value);
+
+const qVec = embed(query);
+const storedChunks = JSON.parse(localStorage.getItem("rag_chunks"));
+const storedVectors = JSON.parse(localStorage.getItem("rag_vectors"));
+
+const scored = storedVectors.map((v, i) => ({
+text: storedChunks[i],
+score: cosine(qVec, v)
+}));
+
+scored.sort((a, b) => b.score - a.score);
+const topChunks = scored.slice(0, top);
+
+resultsOutput.innerHTML = topChunks.map(c =>
+`<div class="chunk highlight">(${c.score.toFixed(2)}) ${c.text}</div>`
+).join("");
+
+const prompt = `Answer the user's question using ONLY the context below.
+
+User query:
+"${query}"
+
+Context:
+${topChunks.map((c, i) => `Chunk ${i+1}: ${c.text}`).join("\n\n")}`;
+
+promptOutput.textContent = prompt;
+answerOutput.textContent =
+"Simulated LLM Answer:\n\n" +
+topChunks.map(c => c.text).join(" ");
+
+activateStep(7);
+}
+
+function activateStep(n) {
+document.querySelectorAll(".step").forEach(s => s.classList.remove("active"));
+document.getElementById("step" + n).classList.add("active");
+}
+</script>
+
+</body>
+</html>
